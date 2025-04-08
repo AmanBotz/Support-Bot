@@ -1,34 +1,20 @@
-#
-# Copyright (C) 2021-2022 by TeamYukki@Github, < https://github.com/YukkiChatBot >.
-#
-# This file is part of < https://github.com/TeamYukki/YukkiChatBot > project,
-# and is released under the "GNU v3.0 License Agreement".
-# Please see < https://github.com/TeamYukki/YukkiChatBot/blob/master/LICENSE >
-#
-# All rights reserved.
-#
-
-from motor.motor_asyncio import AsyncIOMotorClient as MongoClient
-
+from motor.motor_asyncio import AsyncIOMotorClient
 from config import MONGO_DB_URI
 
 db = None
-
-if MONGO_DB_URI != None:
-    mongo = MongoClient(MONGO_DB_URI)
-    db = mongo.ChatBot
-
+if MONGO_DB_URI:
+    client = AsyncIOMotorClient(MONGO_DB_URI)
+    db = client.ChatBot
     usersdb = db.users
     blockeddb = db.block
     modedb = db.mode
+
+    # In-memory cache for mode settings
     modelist = {}
 
-    # Served Users
+    # ----- Served Users ----- #
     async def is_served_user(user_id: int) -> bool:
-        user = await usersdb.find_one({"user_id": user_id})
-        if not user:
-            return False
-        return True
+        return bool(await usersdb.find_one({"user_id": user_id}))
 
     async def get_served_users() -> list:
         users_list = []
@@ -37,17 +23,15 @@ if MONGO_DB_URI != None:
         return users_list
 
     async def add_served_user(user_id: int):
-        is_served = await is_served_user(user_id)
-        if is_served:
+        if await is_served_user(user_id):
             return
-        return await usersdb.insert_one({"user_id": user_id})
+        await usersdb.insert_one({"user_id": user_id})
 
-    # Banned Users
+    # ----- Banned Users ----- #
     async def get_banned_users() -> list:
         results = []
         async for user in blockeddb.find({"user_id": {"$gt": 0}}):
-            user_id = user["user_id"]
-            results.append(user_id)
+            results.append(user["user_id"])
         return results
 
     async def get_banned_count() -> int:
@@ -56,30 +40,25 @@ if MONGO_DB_URI != None:
         return len(users)
 
     async def is_banned_user(user_id: int) -> bool:
-        user = await blockeddb.find_one({"user_id": user_id})
-        if not user:
-            return False
-        return True
+        return bool(await blockeddb.find_one({"user_id": user_id}))
 
     async def add_banned_user(user_id: int):
-        is_gbanned = await is_banned_user(user_id)
-        if is_gbanned:
+        if await is_banned_user(user_id):
             return
-        return await blockeddb.insert_one({"user_id": user_id})
+        await blockeddb.insert_one({"user_id": user_id})
 
     async def remove_banned_user(user_id: int):
-        is_gbanned = await is_banned_user(user_id)
-        if not is_gbanned:
+        if not await is_banned_user(user_id):
             return
-        return await blockeddb.delete_one({"user_id": user_id})
+        await blockeddb.delete_one({"user_id": user_id})
 
-    # Forward Mode
+    # ----- Forward Mode ----- #
     async def is_group() -> bool:
-        chat_id = 123
+        chat_id = 123  # default key for storing mode
         mode = modelist.get(chat_id)
         if mode is None:
-            user = await modedb.find_one({"chat_id": chat_id})
-            if not user:
+            record = await modedb.find_one({"chat_id": chat_id})
+            if record is None:
                 modelist[chat_id] = False
                 return False
             modelist[chat_id] = True
@@ -89,19 +68,18 @@ if MONGO_DB_URI != None:
     async def group_on():
         chat_id = 123
         modelist[chat_id] = True
-        user = await modedb.find_one({"chat_id": chat_id})
-        if not user:
-            return await modedb.insert_one({"chat_id": chat_id})
+        record = await modedb.find_one({"chat_id": chat_id})
+        if record is None:
+            await modedb.insert_one({"chat_id": chat_id})
 
     async def group_off():
         chat_id = 123
         modelist[chat_id] = False
-        user = await modedb.find_one({"chat_id": chat_id})
-        if user:
-            return await modedb.delete_one({"chat_id": chat_id})
+        record = await modedb.find_one({"chat_id": chat_id})
+        if record is not None:
+            await modedb.delete_one({"chat_id": chat_id})
 
 else:
-
     async def is_group() -> bool:
         return False
 
@@ -109,4 +87,4 @@ else:
         return False
 
     async def add_served_user(user_id: int):
-        return True
+        return
