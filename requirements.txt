@@ -1,5 +1,5 @@
-python-dotenv
-pyrogram>=2.0
-tgcrypto
-motor
-dnspython
+python-telegram-bot==20.3
+pymongo==4.5.0
+flask==2.2.3
+python-dotenv==1.0.0
+apscheduler==3.10.1
