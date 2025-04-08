@@ -1,19 +1,18 @@
+polling()
 import os
 import logging
-from typing import Dict, Optional
 from flask import Flask, request
-from telegram import Update, Message, Bot, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import Update, Bot, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
     ApplicationBuilder,
     ContextTypes,
     CommandHandler,
     MessageHandler,
     filters,
-    CallbackQueryHandler,
-    CallbackContext
+    CallbackQueryHandler
 )
 from pymongo import MongoClient
-from pymongo.errors import PyMongoError
+from pymongo.errors import ConnectionFailure
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -22,13 +21,6 @@ load_dotenv()
 # Initialize Flask app
 app = Flask(__name__)
 
-# MongoDB configuration
-client = MongoClient(os.getenv("MONGO_URI"))
-db = client.feedback_bot
-users_collection = db.users
-banned_collection = db.banned
-messages_collection = db.messages
-
 # Configure logging
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -36,10 +28,23 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Database connection check
+try:
+    client = MongoClient(os.getenv("MONGO_URI"))
+    client.admin.command('ping')
+    db = client.feedback_bot
+    users_collection = db.users
+    banned_collection = db.banned
+    messages_collection = db.messages
+    logger.info("✅ Connected to MongoDB successfully")
+except ConnectionFailure as e:
+    logger.error("❌ MongoDB connection failed: %s", e)
+    raise
+
 # Bot configuration
 TOKEN = os.getenv("TELEGRAM_TOKEN")
 ADMIN_ID = int(os.getenv("ADMIN_ID"))
-GROUP_CHAT_ID = int(os.getenv("GROUP_CHAT_ID")) if os.getenv("GROUP_CHAT_ID") else None
+GROUP_CHAT_ID = os.getenv("GROUP_CHAT_ID")
 PORT = int(os.getenv("PORT", 8000))
 
 def is_admin(user_id: int) -> bool:
@@ -48,6 +53,8 @@ def is_admin(user_id: int) -> bool:
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         user = update.effective_user
+        logger.info(f"New user: {user.id}")
+        
         if banned_collection.find_one({"user_id": user.id}):
             await update.message.reply_text("🚫 You are banned from using this bot.")
             return
@@ -65,8 +72,8 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(
             f"👋 Hello {user.first_name}!\n\n"
             "Welcome to Feedback Bot!\n\n"
-            "You can simply type your message here and it will be forwarded to our team.\n\n"
-            "Use /help to see available commands"
+            "Simply type your message here to send feedback to our team.\n"
+            "Use /help for assistance"
         )
     except Exception as e:
         logger.error(f"Start command error: {e}")
@@ -74,28 +81,23 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = (
         "❓ **Help Menu** ❓\n\n"
-        "/start - Start the bot\n"
-        "/help - Show this help message\n\n"
+        "/start - Initialize the bot\n"
+        "/help - Show this message\n\n"
         "Just type your message to send feedback!"
     )
-    if is_admin(update.effective_user.id):
-        help_text += "\n\n**Admin Commands:**\n/ban <user_id> - Ban user\n/unban <user_id> - Unban user\n/broadcast <message> - Send message to all users"
-    
     await update.message.reply_text(help_text, parse_mode="Markdown")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     try:
         user = update.effective_user
         message = update.effective_message
+        logger.info(f"Message from {user.id}: {message.text}")
 
         if banned_collection.find_one({"user_id": user.id}):
             await message.reply_text("🚫 You are banned from using this bot.")
             return
 
-        if message.text.startswith('/'):
-            return
-
-        # Store message in database
+        # Store message
         msg_data = {
             "user_id": user.id,
             "message": message.text,
@@ -104,10 +106,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         }
         messages_collection.insert_one(msg_data)
 
-        # Forward to admin channel
+        # Forward to admin
         forward_text = (
             f"📨 New feedback from {user.mention_html()}\n"
-            f"User ID: {user.id}\n\n"
+            f"User ID: `{user.id}`\n\n"
             f"{message.text}"
         )
         if GROUP_CHAT_ID:
@@ -117,7 +119,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="HTML",
                 reply_markup=InlineKeyboardMarkup([
                     [InlineKeyboardButton("🚫 Ban User", callback_data=f"ban_{user.id}")]
-                ])
+                )
             )
         else:
             sent_msg = await context.bot.send_message(
@@ -126,7 +128,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode="HTML"
             )
 
-        # Update message record with forwarded ID
+        # Update message record
         messages_collection.update_one(
             {"_id": msg_data["_id"]},
             {"$set": {
@@ -137,9 +139,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await message.reply_text("✅ Your message has been forwarded to our team!")
 
-    except PyMongoError as e:
-        logger.error(f"MongoDB error: {e}")
-        await message.reply_text("⚠️ Error processing your message. Please try again later.")
     except Exception as e:
         logger.error(f"Message handling error: {e}")
         await message.reply_text("⚠️ An error occurred. Please try again later.")
@@ -153,7 +152,6 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if not reply_to:
             return
 
-        # Find original message
         original_message = messages_collection.find_one({
             "forwarded_message_id": reply_to.message_id
         })
@@ -161,14 +159,12 @@ async def handle_admin_reply(update: Update, context: ContextTypes.DEFAULT_TYPE)
         if not original_message:
             return
 
-        # Send reply to user
         await context.bot.send_message(
             chat_id=original_message["user_id"],
             text=f"📩 Admin Response:\n\n{update.message.text}"
         )
         await update.message.reply_text("✅ Reply sent to user!")
 
-        # Update message status
         messages_collection.update_one(
             {"_id": original_message["_id"]},
             {"$set": {"status": "replied"}}
@@ -264,11 +260,7 @@ async def button_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
         banned_collection.insert_one({"user_id": user_id})
         await query.message.reply_text(f"✅ User {user_id} has been banned!")
 
-if __name__ == "__main__":
-    # Create bot application
-    application = ApplicationBuilder().token(TOKEN).build()
-
-    # Add handlers
+def setup_handlers(application):
     handlers = [
         CommandHandler("start", start),
         CommandHandler("help", help_command),
@@ -276,17 +268,29 @@ if __name__ == "__main__":
         CommandHandler("unban", unban_user),
         CommandHandler("broadcast", broadcast),
         MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message),
-        MessageHandler(filters.REPLY & filters.Chat(GROUP_CHAT_ID), handle_admin_reply),
         CallbackQueryHandler(button_handler)
     ]
-
+    
+    if GROUP_CHAT_ID:
+        handlers.append(
+            MessageHandler(
+                filters.Chat(GROUP_CHAT_ID) & filters.REPLY & filters.TEXT,
+                handle_admin_reply
+            )
+        )
+    
     for handler in handlers:
         application.add_handler(handler)
 
-    # Flask routes
+if __name__ == "__main__":
+    # Create bot application
+    application = ApplicationBuilder().token(TOKEN).build()
+    setup_handlers(application)
+
+    # Webhook configuration
     @app.route('/')
     def home():
-        return "Feedback Bot is running!", 200
+        return "Bot is running", 200
 
     @app.route('/webhook', methods=['POST'])
     def webhook():
@@ -294,8 +298,12 @@ if __name__ == "__main__":
         application.update_queue.put(update)
         return 'ok', 200
 
-    # Start the bot
-    if os.environ.get('KOYEB'):
+    # Start based on environment
+    if os.getenv("KOYEB"):
+        logger.info("Starting in webhook mode")
+        application.initialize()
+        application.start()
         app.run(host='0.0.0.0', port=PORT)
     else:
+        logger.info("Starting in polling mode")
         application.run_polling()
