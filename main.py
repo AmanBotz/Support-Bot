@@ -16,6 +16,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Create a custom filter for non-edited messages.
+not_edited = filters.create(lambda _, __, message: message.edit_date is None)
+
 # Create the bot client using Pyrogram 2.x
 app = Client(
     "YukkiBot",
@@ -175,7 +178,7 @@ async def broadcast_handler(client: Client, message: Message):
     await message.reply_text(f"Broadcast sent to {broadcast_count} users.")
 
 
-@app.on_message(filters.private & ~filters.edited)
+@app.on_message(filters.private & not_edited)
 async def private_message_handler(client: Client, message: Message):
     user_id = message.from_user.id
     if await mongo.is_banned_user(user_id):
@@ -207,7 +210,7 @@ async def private_message_handler(client: Client, message: Message):
         logger.error(f"Error forwarding message from user {user_id}: {e}")
 
 
-@app.on_message(filters.group & ~filters.edited & filters.user(config.SUDO_USER))
+@app.on_message(filters.group & not_edited & filters.user(config.SUDO_USER))
 async def group_message_handler(client: Client, message: Message):
     if message.reply_to_message and message.text not in ["/unblock", "/block", "/broadcast"]:
         if not message.reply_to_message.forward_sender_name:
