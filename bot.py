@@ -267,7 +267,6 @@ def setup_handlers(application):
     
     for handler in handlers:
         application.add_handler(handler)
-
 if __name__ == "__main__":
     application = ApplicationBuilder().token(TOKEN).build()
     setup_handlers(application)
@@ -283,11 +282,13 @@ if __name__ == "__main__":
         return 'ok', 200
 
     if os.getenv("KOYEB"):
+        logger.info("Starting webhook on port %d", PORT)
         application.run_webhook(
             listen="0.0.0.0",
             port=PORT,
-            url_path=TOKEN,
-            webhook_url=f"https://{os.getenv('KOYEB_APP_NAME')}.koyeb.app/{TOKEN}"
+            secret_token='WEBHOOK_SECRET',
+            webhook_url=f"https://{os.getenv('KOYEB_APP_NAME')}.koyeb.app/webhook"
         )
     else:
+        logger.info("Starting polling mode")
         application.run_polling()
