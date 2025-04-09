@@ -61,7 +61,7 @@ async def cast(client: Client, message: Message):
 
 @app.on_message(
     filters.private 
-    & ~filters.command() 
+    & ~filters.command  # Corrected line (removed parentheses)
     & ~filters.user(OWNER_ID)
 )
 async def user_message(client: Client, message: Message):
