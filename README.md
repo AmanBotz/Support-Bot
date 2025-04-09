@@ -1,20 +1,5 @@
-# Feedback Bot for Telegram
-
-A bot for receiving user feedback with admin management features.
-
-## Features
-- Direct message handling from users
-- Admin reply system in group chat
-- User banning/unbanning
-- Broadcast messages to all users
-- MongoDB storage
-- Koyeb deployment ready
-
-## Setup
-
-1. Clone repository
-2. Create `.env` file from template
-3. Fill in your credentials
-4. Install dependencies:
-```bash
-pip install -r requirements.txt
+API_ID=your_telegram_api_id
+API_HASH=your_telegram_api_hash
+BOT_TOKEN=your_bot_token_from_botfather
+OWNER_ID=your_telegram_user_id
+MONGO_URI=mongodb_connection_string
