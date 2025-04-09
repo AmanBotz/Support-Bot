@@ -19,6 +19,10 @@ app = Client("support_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKE
 # Initialize MongoDB connection.
 db = get_database()
 
+# Global mapping to link forwarded message IDs (in the owner’s chat)
+# to original user IDs.
+reply_mapping = {}
+
 def register_user(user_id: int):
     """Register a new user in the database if not already present."""
     if get_user(user_id) is None:
@@ -35,7 +39,10 @@ def start_handler(client: Client, message: Message):
     """Send a welcome message on /start and register the user."""
     user_id = message.from_user.id
     register_user(user_id)
-    app.send_message(chat_id=user_id, text="Welcome! You can contact us through this bot. Simply send your message now.")
+    app.send_message(
+        chat_id=user_id,
+        text="Welcome! You can contact us through this bot. Simply send your message now."
+    )
 
 @app.on_message(filters.command("ban") & filters.user(OWNER_ID))
 def ban_handler(client: Client, message: Message):
@@ -86,7 +93,7 @@ def cast_handler(client: Client, message: Message):
     sent_count = 0
     for user in users:
         user_id = user["_id"]
-        # Only send to users not banned.
+        # Only send to non-banned users.
         if user.get("banned", False):
             continue
         try:
@@ -101,10 +108,10 @@ def message_handler(client: Client, message: Message):
     """
     Handle incoming messages from users.
     
-    - If the sender is banned the bot ignores their message.
-    - For non-command messages:
-      - If the message is from the owner and is a reply to a forwarded message, it sends that reply back to the original user.
-      - Otherwise, the user’s message is forwarded to the owner.
+    For non-command messages:
+    - If the message is from the owner and is a reply to a forwarded message,
+      send that reply back to the original user using our reply mapping.
+    - Otherwise, forward the message to the owner and store the mapping.
     """
     user_id = message.from_user.id
     register_user(user_id)
@@ -113,19 +120,31 @@ def message_handler(client: Client, message: Message):
         return
 
     # Owner replying to a forwarded message.
-    if user_id == OWNER_ID and message.reply_to_message and message.reply_to_message.forward_from:
-        target_id = message.reply_to_message.forward_from.id
-        try:
-            app.send_message(chat_id=target_id, text=message.text)
-            message.reply("Reply sent.")
-        except Exception as e:
-            logger.error(f"Failed to send reply to {target_id}: {e}")
-        return
+    if user_id == OWNER_ID and message.reply_to_message:
+        # Try to get target user from our stored mapping.
+        original_user_id = reply_mapping.get(message.reply_to_message.id)
+        if original_user_id:
+            try:
+                app.send_message(chat_id=original_user_id, text=message.text)
+                message.reply("Reply sent.")
+                # Optionally remove the mapping after reply.
+                del reply_mapping[message.reply_to_message.id]
+            except Exception as e:
+                logger.error(f"Failed to send reply to {original_user_id}: {e}")
+                message.reply("There was an error sending your reply.")
+            return
 
     # Forward a user's message to the owner.
     try:
-        # Use message.id instead of an undefined message_id
-        app.forward_messages(chat_id=OWNER_ID, from_chat_id=message.chat.id, message_ids=message.id)
+        forwarded = app.forward_messages(
+            chat_id=OWNER_ID,
+            from_chat_id=message.chat.id,
+            message_ids=message.id
+        )
+        # Pyrogram might return a list. Handle both cases.
+        forwarded_message = forwarded[0] if isinstance(forwarded, list) else forwarded
+        # Store the mapping: forwarded message ID -> original sender.
+        reply_mapping[forwarded_message.id] = user_id
         message.reply("Your message has been sent to support.")
     except Exception as e:
         logger.error(f"Failed to forward message from {user_id}: {e}")
