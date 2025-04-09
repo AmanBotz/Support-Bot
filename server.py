@@ -10,20 +10,19 @@ web = Flask(__name__)
 def home():
     return "Bot Running"
 
-async def run_bot():
+async def bot_main():
     await bot_client.start()
-    print("Bot client started")
-    await bot_client.run()
+    print("🤖 Bot successfully started")
+    await asyncio.Event().wait()  # Run forever
 
-def start_bot():
+def run_bot():
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    loop.run_until_complete(run_bot())
+    loop.run_until_complete(bot_main())
 
 if __name__ == "__main__":
     # Start bot in separate thread
-    bot_thread = threading.Thread(target=start_bot, daemon=True)
-    bot_thread.start()
+    threading.Thread(target=run_bot, daemon=True).start()
     
     # Start Flask web server
-    web.run(host="0.0.0.0", port=int(os.getenv("PORT", 8000)), use_reloader=False)
+    web.run(host="0.0.0.0", port=os.getenv("PORT", 8000), use_reloader=False)
