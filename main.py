@@ -59,10 +59,9 @@ async def cast(client: Client, message: Message):
 
 @app.on_message(
     filters.private &
-    filters.text &
-    ~filters.command(commands=["start", "ban", "unban", "cast"]) &
+    ~filters.command(["start", "ban", "unban", "cast"]) &
     ~filters.user(OWNER_ID)
-)
+        )
 async def user_message(client: Client, message: Message):
     user = message.from_user
     user_data = db.get_user(user.id)
