@@ -1,38 +1,28 @@
 import os
 from pymongo import MongoClient
-from pymongo.collection import Collection
-from typing import Dict, Any
 
-class Database:
-    def __init__(self):
-        self.client = MongoClient(os.getenv("MONGO_URI"))
-        self.db = self.client["support_bot"]
-        self.users: Collection = self.db.users
-        self.chats: Collection = self.db.chats
-        
-    def get_user(self, user_id: int) -> Dict[str, Any]:
-        return self.users.find_one({"_id": user_id})
-    
-    def add_user(self, user_id: int, name: str):
-        if not self.get_user(user_id):
-            self.users.insert_one({
-                "_id": user_id,
-                "name": name,
-                "banned": False
-            })
-    
-    def update_banned(self, user_id: int, banned: bool):
-        self.users.update_one(
-            {"_id": user_id},
-            {"$set": {"banned": banned}}
-        )
-    
-    def get_all_users(self):
-        return list(self.users.find({"banned": False}))
-    
-    def add_chat(self, user_id: int, message_id: int, is_user: bool):
-        self.chats.insert_one({
-            "user_id": user_id,
-            "message_id": message_id,
-            "is_user": is_user
-        })
+# Read the MongoDB URI from environment variables or use the local default.
+MONGO_URI = os.environ.get("MONGO_URI", "mongodb://localhost:27017/")
+client = MongoClient(MONGO_URI)
+db = client["telegram_support_bot"]
+
+def get_database():
+    """Return the MongoDB database object."""
+    return db
+
+def add_user(user_id: int):
+    """Insert a new user into the users collection if they do not already exist."""
+    if db.users.find_one({"_id": user_id}) is None:
+        db.users.insert_one({"_id": user_id, "banned": False})
+
+def get_user(user_id: int):
+    """Retrieve a user's record from the users collection."""
+    return db.users.find_one({"_id": user_id})
+
+def update_user_ban_status(user_id: int, ban: bool):
+    """Update the ban status of a user."""
+    db.users.update_one({"_id": user_id}, {"$set": {"banned": ban}}, upsert=True)
+
+def get_all_users():
+    """Retrieve all user records."""
+    return db.users.find()
