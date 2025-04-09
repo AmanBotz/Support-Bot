@@ -19,7 +19,7 @@ app = Client("support_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKE
 # Initialize MongoDB connection.
 db = get_database()
 
-# Global mapping: forwarded message ID (in owner's chat) -> original sender ID.
+# Global mapping: forwarded message ID in owner's chat -> original sender ID.
 reply_mapping = {}
 
 def register_user(user_id: int):
@@ -29,15 +29,32 @@ def register_user(user_id: int):
         logger.info(f"Registered user {user_id}")
 
 def is_banned(user_id: int) -> bool:
-    """Return True if the user is banned (as per the database record)."""
+    """Return True if the user is banned."""
     user = get_user(user_id)
     return user.get("banned", False) if user else False
 
-# ========= Owner-only Command Handlers =========
+def guard_banned(func):
+    """
+    A decorator for non-owner message handlers.
+    If the sender is banned, they are immediately notified and no further processing occurs.
+    """
+    def wrapper(client: Client, message: Message):
+        user_id = message.from_user.id
+        register_user(user_id)  # Ensure user is registered.
+        if is_banned(user_id):
+            try:
+                message.reply("🚫 You are banned from contacting support.")
+            except Exception as e:
+                logger.error(f"Failed to notify banned user {user_id}: {e}")
+            return
+        return func(client, message)
+    return wrapper
+
+# ========== Owner-only Command Handlers ==========
 @app.on_message(filters.command("ban") & filters.user(OWNER_ID))
 def ban_handler(client: Client, message: Message):
     """
-    Ban a user by replying to their message or providing their user_id.
+    Ban a user by replying to their message or providing a user_id.
     Notifies the target user of the ban.
     """
     if message.reply_to_message:
@@ -62,7 +79,7 @@ def ban_handler(client: Client, message: Message):
 @app.on_message(filters.command("unban") & filters.user(OWNER_ID))
 def unban_handler(client: Client, message: Message):
     """
-    Unban a user by replying to their message or providing their user_id.
+    Unban a user by replying to their message or providing a user_id.
     Notifies the target user of the unban.
     """
     if message.reply_to_message:
@@ -87,7 +104,7 @@ def unban_handler(client: Client, message: Message):
 @app.on_message(filters.command("unbanall") & filters.user(OWNER_ID))
 def unbanall_handler(client: Client, message: Message):
     """
-    Unban all users in the database.
+    Unban all users.
     """
     result = db.users.update_many({}, {"$set": {"banned": False}})
     message.reply(f"✅ Unbanned {result.modified_count} users.")
@@ -116,34 +133,22 @@ def cast_handler(client: Client, message: Message):
             logger.error(f"Failed to send broadcast to {user_id}: {e}")
     message.reply(f"✅ Broadcast sent to {sent_count} users.")
 
-# ========= User Command Handlers =========
+# ========== Non-owner Message Handlers ==========
+
 @app.on_message(filters.command("start") & ~filters.user(OWNER_ID))
+@guard_banned
 def start_handler(client: Client, message: Message):
-    """Welcome new users. If the user is banned, notify them and stop processing."""
+    """Send a welcome message when a user sends /start."""
     user_id = message.from_user.id
-    register_user(user_id)
-    if is_banned(user_id):
-        app.send_message(chat_id=user_id, text="🚫 You are banned from contacting support.")
-        return
     app.send_message(chat_id=user_id, text="👋 Welcome! You can contact us through this bot. Simply send your message now.")
 
-# ========= General Message Handler for Users =========
 @app.on_message(~filters.command(["ban", "unban", "unbanall", "cast", "start"]) & ~filters.user(OWNER_ID))
+@guard_banned
 def user_message_handler(client: Client, message: Message):
     """
-    For non-command messages from users.
-    Immediately checks if the user is banned. If so, notifies them and does nothing.
-    Otherwise, forwards the message to the owner and stores a mapping for replies.
+    For non-command messages from users:
+    Forward the user's message to the owner and store a mapping for later reply.
     """
-    user_id = message.from_user.id
-    register_user(user_id)
-    if is_banned(user_id):
-        try:
-            message.reply("🚫 You are banned from contacting support.")
-        except Exception as e:
-            logger.error(f"Error replying to banned user {user_id}: {e}")
-        return
-
     try:
         forwarded = app.forward_messages(
             chat_id=OWNER_ID,
@@ -151,18 +156,19 @@ def user_message_handler(client: Client, message: Message):
             message_ids=message.id
         )
         forwarded_message = forwarded[0] if isinstance(forwarded, list) else forwarded
-        reply_mapping[forwarded_message.id] = user_id
+        reply_mapping[forwarded_message.id] = message.from_user.id
         message.reply("✅ Your message has been sent to support.")
     except Exception as e:
-        logger.error(f"Failed to forward message from {user_id}: {e}")
+        logger.error(f"Failed to forward message from {message.from_user.id}: {e}")
         message.reply("❌ There was an error sending your message.")
 
-# ========= Owner Reply Handler =========
+# ========== Owner Reply Handler ==========
+
 @app.on_message(filters.user(OWNER_ID) & ~filters.command(["ban", "unban", "unbanall", "cast"]))
 def owner_reply_handler(client: Client, message: Message):
     """
-    When the owner replies to a forwarded message, look up the original sender
-    using the stored mapping and send the reply to that user.
+    When the owner replies to a forwarded message,
+    look up the original sender and forward the owner's reply.
     """
     if message.reply_to_message:
         original_user_id = reply_mapping.get(message.reply_to_message.id)
