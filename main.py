@@ -67,7 +67,7 @@ async def cast(client: Client, message: Message):
     
     await message.reply(f"Broadcast sent to {success_count} out of {len(users)} users")
 
-@app.on_message(filters.private & ~filters.command & ~filters.user(OWNER_ID))
+@app.on_message(filters.private & ~filters.command() & ~filters.user(OWNER_ID))
 async def user_message(client: Client, message: Message):
     user = message.from_user
     user_data = db.get_user(user.id)
