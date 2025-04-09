@@ -1,103 +1,135 @@
 import os
+import logging
 from pyrogram import Client, filters
 from pyrogram.types import Message
-from mongo import Database
+from mongo import get_database, add_user, update_user_ban_status, get_user, get_all_users
 
-app = Client(
-    "support_bot",
-    api_id=os.getenv("API_ID"),
-    api_hash=os.getenv("API_HASH"),
-    bot_token=os.getenv("BOT_TOKEN")
-)
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
-db = Database()
-OWNER_ID = int(os.getenv("OWNER_ID"))
-reply_cache = {}
+# Read configuration from environment variables.
+BOT_TOKEN = os.environ.get("BOT_TOKEN")
+API_ID = int(os.environ.get("API_ID"))
+API_HASH = os.environ.get("API_HASH")
+OWNER_ID = int(os.environ.get("OWNER_ID", 0))
+
+# Initialize the Pyrogram bot.
+app = Client("support_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+
+# Initialize MongoDB connection.
+db = get_database()
+
+def register_user(user_id: int):
+    """Register a new user in the database if not already present."""
+    if get_user(user_id) is None:
+        add_user(user_id)
+        logger.info(f"Registered user {user_id}")
+
+def is_banned(user_id: int) -> bool:
+    """Check if the user is banned."""
+    user = get_user(user_id)
+    return user.get("banned", False) if user else False
 
 @app.on_message(filters.command("start"))
-async def start(client: Client, message: Message):
-    user = message.from_user
-    if not db.get_user(user.id):
-        db.add_user(user.id, user.first_name)
-    await message.reply("🚀 Welcome! Send your message directly and we'll respond ASAP.")
+def start_handler(client: Client, message: Message):
+    """Send a welcome message on /start and register the user."""
+    user_id = message.from_user.id
+    register_user(user_id)
+    app.send_message(chat_id=user_id, text="Welcome! You can contact us through this bot. Simply send your message now.")
 
 @app.on_message(filters.command("ban") & filters.user(OWNER_ID))
-async def ban(client: Client, message: Message):
+def ban_handler(client: Client, message: Message):
+    """
+    Ban a user.
+    Usage: /ban <user_id>
+    Only the bot owner (OWNER_ID) can use this.
+    """
+    if len(message.command) < 2:
+        message.reply("Usage: /ban <user_id>")
+        return
     try:
-        user_id = int(message.command[1])
-        db.update_banned(user_id, True)
-        await message.reply(f"🔨 User {user_id} banned")
-    except (IndexError, ValueError):
-        await message.reply("❗ Usage: /ban <user_id>")
+        target_id = int(message.command[1])
+        update_user_ban_status(target_id, True)
+        message.reply(f"User {target_id} has been banned.")
+    except ValueError:
+        message.reply("Invalid user_id.")
 
 @app.on_message(filters.command("unban") & filters.user(OWNER_ID))
-async def unban(client: Client, message: Message):
+def unban_handler(client: Client, message: Message):
+    """
+    Unban a user.
+    Usage: /unban <user_id>
+    Only the bot owner (OWNER_ID) can use this.
+    """
+    if len(message.command) < 2:
+        message.reply("Usage: /unban <user_id>")
+        return
     try:
-        user_id = int(message.command[1])
-        db.update_banned(user_id, False)
-        await message.reply(f"🔓 User {user_id} unbanned")
-    except (IndexError, ValueError):
-        await message.reply("❗ Usage: /unban <user_id>")
+        target_id = int(message.command[1])
+        update_user_ban_status(target_id, False)
+        message.reply(f"User {target_id} has been unbanned.")
+    except ValueError:
+        message.reply("Invalid user_id.")
 
 @app.on_message(filters.command("cast") & filters.user(OWNER_ID))
-async def cast(client: Client, message: Message):
+def cast_handler(client: Client, message: Message):
+    """
+    Broadcast a message to all users.
+    Usage: /cast <message>
+    Only the bot owner (OWNER_ID) can use this.
+    """
     if len(message.command) < 2:
-        await message.reply("❗ Usage: /cast <message>")
+        message.reply("Usage: /cast <message>")
         return
-    
-    text = message.text.split(" ", 1)[1]
-    users = db.get_all_users()
-    
-    sent = 0
+    cast_message = message.text.split(" ", 1)[1]
+    users = list(get_all_users())
+    sent_count = 0
     for user in users:
-        try:
-            await client.send_message(user["_id"], text)
-            sent += 1
-        except:
+        user_id = user["_id"]
+        # Only send to users not banned.
+        if user.get("banned", False):
             continue
-    await message.reply(f"📢 Broadcast sent to {sent}/{len(users)} users")
+        try:
+            app.send_message(chat_id=user_id, text=f"Broadcast: {cast_message}")
+            sent_count += 1
+        except Exception as e:
+            logger.error(f"Failed to send message to {user_id}: {e}")
+    message.reply(f"Broadcast message sent to {sent_count} users.")
 
-@app.on_message(
-    filters.private &
-    ~filters.command(["start", "ban", "unban", "cast"]) &
-    ~filters.user(OWNER_ID)
-)
-async def user_message(client: Client, message: Message):
-    user = message.from_user
-    user_data = db.get_user(user.id)
+@app.on_message(~filters.command(["start", "ban", "unban", "cast"]))
+def message_handler(client: Client, message: Message):
+    """
+    Handle incoming messages from users.
     
-    if not user_data:
-        db.add_user(user.id, user.first_name)
-        user_data = db.get_user(user.id)
+    - If the sender is banned the bot ignores their message.
+    - For non-command messages:
+      - If the message is from the owner and is a reply to a forwarded message, it sends that reply back to the original user.
+      - Otherwise, the user’s message is forwarded to the owner.
+    """
+    user_id = message.from_user.id
+    register_user(user_id)
     
-    if user_data.get("banned"):
+    if is_banned(user_id):
         return
-    
-    try:
-        forwarded = await message.forward(OWNER_ID)
-        reply_cache[forwarded.id] = user.id
-        db.add_chat(user.id, message.id, is_user=True)
-    except Exception as e:
-        print(f"Forward error: {e}")
 
-@app.on_message(filters.private & filters.user(OWNER_ID) & filters.reply)
-async def owner_reply(client: Client, message: Message):
-    replied = message.reply_to_message
-    if not replied or replied.id not in reply_cache:
+    # Owner replying to a forwarded message.
+    if user_id == OWNER_ID and message.reply_to_message and message.reply_to_message.forward_from:
+        target_id = message.reply_to_message.forward_from.id
+        try:
+            app.send_message(chat_id=target_id, text=message.text)
+            message.reply("Reply sent.")
+        except Exception as e:
+            logger.error(f"Failed to send reply to {target_id}: {e}")
         return
-    
-    user_id = reply_cache[replied.id]
-    user_data = db.get_user(user_id)
-    
-    if not user_data or user_data.get("banned"):
-        return
-    
+
+    # Forward a user's message to the owner.
     try:
-        await client.send_message(user_id, message.text)
-        db.add_chat(user_id, message.id, is_user=False)
+        app.forward_messages(chat_id=OWNER_ID, from_chat_id=message.chat.id, message_ids=message.message_id)
+        message.reply("Your message has been sent to support.")
     except Exception as e:
-        await message.reply(f"❌ Failed to send message: {e}")
+        logger.error(f"Failed to forward message from {user_id}: {e}")
+        message.reply("There was an error sending your message.")
 
 if __name__ == "__main__":
-    print("🤖 Bot starting...")
+    logger.info("Bot is starting...")
     app.run()
