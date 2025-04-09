@@ -68,6 +68,10 @@ def ban_handler(client: Client, message: Message):
 
     update_user_ban_status(target_id, True)
     message.reply(f"🚫 User {target_id} has been banned.")
+    try:
+        app.send_message(chat_id=target_id, text="🚫 You have been banned from contacting support.")
+    except Exception as e:
+        logger.error(f"Failed to notify banned user {target_id}: {e}")
 
 @app.on_message(filters.command("unban") & filters.user(OWNER_ID))
 def unban_handler(client: Client, message: Message):
@@ -93,6 +97,10 @@ def unban_handler(client: Client, message: Message):
 
     update_user_ban_status(target_id, False)
     message.reply(f"✅ User {target_id} has been unbanned.")
+    try:
+        app.send_message(chat_id=target_id, text="✅ You have been unbanned. You can now contact support.")
+    except Exception as e:
+        logger.error(f"Failed to notify user {target_id} for unban: {e}")
 
 @app.on_message(filters.command("unbanall") & filters.user(OWNER_ID))
 def unbanall_handler(client: Client, message: Message):
@@ -113,9 +121,8 @@ def cast_handler(client: Client, message: Message):
     if len(message.command) < 2:
         message.reply("❌ Usage: /cast <message>")
         return
-    # Update broadcast text with an emoji and a prefix.
     cast_message = message.text.split(" ", 1)[1]
-    broadcast_text = f"{cast_message}"
+    broadcast_text = f"📢 Broadcast:\n\n{cast_message}"
     users = list(get_all_users())
     sent_count = 0
     for user in users:
@@ -136,6 +143,7 @@ def message_handler(client: Client, message: Message):
     Handle incoming messages from users.
 
     For non-command messages:
+    - If the user is banned, notify them that they are banned.
     - If the message is from the owner and is a reply to a forwarded message,
       send that reply back to the original user using our reply mapping.
     - Otherwise, forward the message to the owner and store the mapping.
@@ -144,17 +152,21 @@ def message_handler(client: Client, message: Message):
     register_user(user_id)
 
     if is_banned(user_id):
+        try:
+            app.send_message(chat_id=user_id, text="🚫 You are banned from contacting support.")
+        except Exception as e:
+            logger.error(f"Failed to notify banned user {user_id}: {e}")
         return
 
     # Owner replying to a forwarded message.
     if user_id == OWNER_ID and message.reply_to_message:
-        # Try to get the target user from our stored mapping.
+        # Try to get the original user's ID from our stored mapping.
         original_user_id = reply_mapping.get(message.reply_to_message.id)
         if original_user_id:
             try:
                 app.send_message(chat_id=original_user_id, text=message.text)
                 message.reply("✉️ Reply sent.")
-                # Optionally remove mapping after reply.
+                # Optionally remove the mapping after the reply.
                 del reply_mapping[message.reply_to_message.id]
             except Exception as e:
                 logger.error(f"Failed to send reply to {original_user_id}: {e}")
