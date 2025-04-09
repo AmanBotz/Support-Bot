@@ -19,8 +19,7 @@ app = Client("support_bot", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKE
 # Initialize MongoDB connection.
 db = get_database()
 
-# Global mapping to link forwarded message IDs (in the owner’s chat)
-# to original user IDs.
+# Global mapping: forwarded message ID (owner's chat) -> original sender ID.
 reply_mapping = {}
 
 def register_user(user_id: int):
@@ -34,9 +33,24 @@ def is_banned(user_id: int) -> bool:
     user = get_user(user_id)
     return user.get("banned", False) if user else False
 
+# ========= Global Banned-User Handler =========
+@app.on_message(filters.create(lambda _, __, m: m.from_user.id != OWNER_ID and is_banned(m.from_user.id)))
+def banned_handler(client: Client, message: Message):
+    """
+    Immediately notify and block any message sent by a banned user (unless it's from the owner).
+    This prevents banned users from triggering any other handlers.
+    """
+    try:
+        message.reply("🚫 You are banned from contacting support.")
+    except Exception as e:
+        logger.error(f"Error notifying banned user {message.from_user.id}: {e}")
+    # Return so that no further processing occurs.
+    return
+
+# ========= Command Handlers =========
 @app.on_message(filters.command("start"))
 def start_handler(client: Client, message: Message):
-    """Send a welcome message on /start and register the user."""
+    """Welcome message on /start and register the user."""
     user_id = message.from_user.id
     register_user(user_id)
     app.send_message(
@@ -47,13 +61,9 @@ def start_handler(client: Client, message: Message):
 @app.on_message(filters.command("ban") & filters.user(OWNER_ID))
 def ban_handler(client: Client, message: Message):
     """
-    Ban a user either by replying to their message or by providing their user_id.
-    Usage:
-      - /ban <user_id>
-      - Reply to a user's message with /ban
-    Only the bot owner (OWNER_ID) can use this.
+    Ban a user by replying to their message or providing their user_id.
+    Notifies the user of their banned status.
     """
-    # Determine target user ID based on reply or argument.
     if message.reply_to_message:
         target_id = message.reply_to_message.from_user.id
     elif len(message.command) >= 2:
@@ -76,13 +86,9 @@ def ban_handler(client: Client, message: Message):
 @app.on_message(filters.command("unban") & filters.user(OWNER_ID))
 def unban_handler(client: Client, message: Message):
     """
-    Unban a user either by replying to their message or by providing their user_id.
-    Usage:
-      - /unban <user_id>
-      - Reply to a user's message with /unban
-    Only the bot owner (OWNER_ID) can use this.
+    Unban a user by replying to their message or providing their user_id.
+    Notifies the user that they have been unbanned.
     """
-    # Determine target user ID based on reply or argument.
     if message.reply_to_message:
         target_id = message.reply_to_message.from_user.id
     elif len(message.command) >= 2:
@@ -106,7 +112,7 @@ def unban_handler(client: Client, message: Message):
 def unbanall_handler(client: Client, message: Message):
     """
     Unban all users.
-    Only the bot owner (OWNER_ID) can use this command.
+    Only the bot owner can use this.
     """
     result = db.users.update_many({}, {"$set": {"banned": False}})
     message.reply(f"✅ Unbanned {result.modified_count} users.")
@@ -114,9 +120,8 @@ def unbanall_handler(client: Client, message: Message):
 @app.on_message(filters.command("cast") & filters.user(OWNER_ID))
 def cast_handler(client: Client, message: Message):
     """
-    Broadcast a message to all users.
-    Usage: /cast <message>
-    Only the bot owner (OWNER_ID) can use this.
+    Broadcast a message to all non-banned users.
+    The broadcast message includes a prefix with an emoji.
     """
     if len(message.command) < 2:
         message.reply("❌ Usage: /cast <message>")
@@ -127,9 +132,8 @@ def cast_handler(client: Client, message: Message):
     sent_count = 0
     for user in users:
         user_id = user["_id"]
-        # Only send to non-banned users.
         if user.get("banned", False):
-            continue
+            continue  # Skip banned users.
         try:
             app.send_message(chat_id=user_id, text=broadcast_text)
             sent_count += 1
@@ -137,52 +141,38 @@ def cast_handler(client: Client, message: Message):
             logger.error(f"Failed to send broadcast to {user_id}: {e}")
     message.reply(f"✅ Broadcast sent to {sent_count} users.")
 
+# ========= Message Forwarding and Owner Reply =========
 @app.on_message(~filters.command(["start", "ban", "unban", "unbanall", "cast"]))
 def message_handler(client: Client, message: Message):
     """
-    Handle incoming messages from users.
-
-    For non-command messages:
-    - If the user is banned, notify them that they are banned.
-    - If the message is from the owner and is a reply to a forwarded message,
-      send that reply back to the original user using our reply mapping.
-    - Otherwise, forward the message to the owner and store the mapping.
+    For non-command messages (from non-banned users):
+      - If from the owner replying to a forwarded user message, send the reply back to the original user.
+      - Otherwise, forward the user's message to the owner and record a mapping.
     """
     user_id = message.from_user.id
     register_user(user_id)
 
-    if is_banned(user_id):
-        try:
-            app.send_message(chat_id=user_id, text="🚫 You are banned from contacting support.")
-        except Exception as e:
-            logger.error(f"Failed to notify banned user {user_id}: {e}")
-        return
-
     # Owner replying to a forwarded message.
     if user_id == OWNER_ID and message.reply_to_message:
-        # Try to get the original user's ID from our stored mapping.
         original_user_id = reply_mapping.get(message.reply_to_message.id)
         if original_user_id:
             try:
                 app.send_message(chat_id=original_user_id, text=message.text)
                 message.reply("✉️ Reply sent.")
-                # Optionally remove the mapping after the reply.
-                del reply_mapping[message.reply_to_message.id]
+                del reply_mapping[message.reply_to_message.id]  # Optionally clear mapping.
             except Exception as e:
                 logger.error(f"Failed to send reply to {original_user_id}: {e}")
                 message.reply("❌ There was an error sending your reply.")
             return
 
-    # Forward a user's message to the owner.
+    # Forward the user's message to the owner and store the mapping.
     try:
         forwarded = app.forward_messages(
             chat_id=OWNER_ID,
             from_chat_id=message.chat.id,
             message_ids=message.id
         )
-        # Pyrogram may return a list; handle both cases.
         forwarded_message = forwarded[0] if isinstance(forwarded, list) else forwarded
-        # Store the mapping: forwarded message ID -> original sender.
         reply_mapping[forwarded_message.id] = user_id
         message.reply("✅ Your message has been sent to support.")
     except Exception as e:
