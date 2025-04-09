@@ -1,6 +1,6 @@
 import os
-from pyrogram import Client, filters, types
-from pyrogram.types import Message, User
+from pyrogram import Client, filters
+from pyrogram.types import Message
 from mongo import Database
 
 app = Client(
@@ -19,7 +19,6 @@ async def start(client: Client, message: Message):
     user = message.from_user
     if not db.get_user(user.id):
         db.add_user(user.id, user.first_name)
-    
     await message.reply("🚀 Welcome! Send your message directly and we'll respond ASAP.")
 
 @app.on_message(filters.command("ban") & filters.user(OWNER_ID))
@@ -56,13 +55,12 @@ async def cast(client: Client, message: Message):
             sent += 1
         except:
             continue
-    
     await message.reply(f"📢 Broadcast sent to {sent}/{len(users)} users")
 
 @app.on_message(
-    filters.private 
-    & ~filters.command  # Corrected line (removed parentheses)
-    & ~filters.user(OWNER_ID)
+    filters.private &
+    ~filters.command(None) &  # Correct filter for non-command messages
+    ~filters.user(OWNER_ID)
 )
 async def user_message(client: Client, message: Message):
     user = message.from_user
