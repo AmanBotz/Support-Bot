@@ -124,7 +124,8 @@ def message_handler(client: Client, message: Message):
 
     # Forward a user's message to the owner.
     try:
-        app.forward_messages(chat_id=OWNER_ID, from_chat_id=message.chat.id, message_ids=message_id)
+        # Use message.id instead of an undefined message_id
+        app.forward_messages(chat_id=OWNER_ID, from_chat_id=message.chat.id, message_ids=message.id)
         message.reply("Your message has been sent to support.")
     except Exception as e:
         logger.error(f"Failed to forward message from {user_id}: {e}")
