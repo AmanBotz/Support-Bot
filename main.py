@@ -1,4 +1,4 @@
-app.run()import os
+import os
 from pyrogram import Client, filters, types
 from pyrogram.types import Message
 from mongo import Database
