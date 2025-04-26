@@ -5,6 +5,8 @@ A versatile Telegram support bot built with Pyrogram and MongoDB. It handles use
 
 # Features
 
+#no need uptimerobot
+
 /start: Greets users and guides them to send support messages.
 
 Message Forwarding: Forwards user messages to the designated owner.
