@@ -35,5 +35,5 @@ API_ID=123456
 API_HASH=abcdef1234567890abcdef1234567890
 BOT_TOKEN=123456:ABC-DEF1234ghIkl-zyx57W2v1u123ew11
 OWNER_ID=123456789
-MONGO_URL=mongodb://localhost:27017/support_bot
+MONGO_URI=mongodb://localhost:27017/support_bot
 FQDN=https://example.com/ # your server url, so your bot will not sleep
